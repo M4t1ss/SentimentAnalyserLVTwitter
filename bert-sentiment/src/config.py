@@ -6,6 +6,8 @@ MAX_LEN = 150 #256
 TRAIN_BATCH_SIZE = 8
 VALID_BATCH_SIZE = 4
 EPOCHS = 5
+LEARNING_RATE = 1e-5
+DROPOUT = 0.3
 
 # Processed training, development and evaluation files
 TRAIN_PROC = ""
