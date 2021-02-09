@@ -69,7 +69,7 @@ def main(_):
 
     device = config.device
     
-    model = BERTBaseUncased()
+    model = BERTBaseUncased(config.DROPOUT)
     model.load_state_dict(torch.load(
         model_path, map_location=torch.device(device)))
     model.to(device)
