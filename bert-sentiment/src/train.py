@@ -7,6 +7,7 @@ import torch
 import pandas as pd
 import torch.nn as nn
 import numpy as np
+from absl import app, flags
 
 from model import BERTBaseUncased
 from sklearn import model_selection
@@ -28,30 +29,28 @@ torch.backends.cudnn.deterministic = True
 writer = SummaryWriter()
 logger.add("experiment.log")
 
+flags.DEFINE_float('lr', 0.00001, "")
+flags.DEFINE_float('dropout', 0.3, "")
 
-def run(dataset_index):
+FLAGS = flags.FLAGS
 
-    datasets =[
-    "gold.prep-auto.full.prep.{0}.csv", 
-    "gold.prep-auto.no-emoticons.prep.{0}.csv", 
-    "gold.prep-auto.prep.{0}.csv",
-    "gold.prep-english.prep.{0}.csv" ,
-    "gold.prep-peisenieks.prep.{0}.csv",
-    "gold.prep.{0}.csv"
-    ] 
-    # dataset_index = 5 #0-5
+def main(_):
+    LEARNING_RATE = config.LEARNING_RATE
+    DROPOUT = config.DROPOUT
 
-    train_file = config.DATASET_LOCATION + datasets[dataset_index].format("train")
+    if FLAGS.lr:
+        LEARNING_RATE = FLAGS.lr
+    if FLAGS.dropout:
+        DROPOUT = FLAGS.dropout
+
+    train_file = config.TRAIN_PROC
     df_train = pd.read_csv(train_file).fillna("none")
-    df_train.label = df_train.label.apply(label_encoder)
 
-    valid_file = config.DATASET_LOCATION + datasets[dataset_index].format("dev") #"gold.prep-auto.full.prep.dev.csv" #gold.prep-auto.no-emoticons.prep.dev.csv" #gold.prep-auto.prep.dev.csv" #"gold.prep-english.prep.dev.csv" #"gold.prep-peisenieks.prep.dev.csv" #"gold.prep.dev.csv"
+    valid_file = config.DEVEL_PROC
     df_valid = pd.read_csv(valid_file).fillna("none")
-    df_valid.label = df_valid.label.apply(label_encoder)
 
-    test_file = config.DATASET_LOCATION + "eval.prep.test.csv"
+    test_file = config.EVAL_PROC
     df_test = pd.read_csv(test_file).fillna("none")
-    df_test.label = df_test.label.apply(label_encoder)
     
     logger.info(f"Bert Model: {config.BERT_PATH}")
     logger.info(f"Current date and time :{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ")
@@ -98,7 +97,7 @@ def run(dataset_index):
     )
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') #torch.device("cuda")
-    model = BERTBaseUncased()
+    model = BERTBaseUncased(DROPOUT)
     model.to(device)
 
     param_optimizer = list(model.named_parameters())
@@ -112,7 +111,7 @@ def run(dataset_index):
 
     num_train_steps = int(
         len(df_train) / config.TRAIN_BATCH_SIZE * config.EPOCHS)
-    optimizer = AdamW(optimizer_parameters, lr=3e-5)
+    optimizer = AdamW(optimizer_parameters, lr=LEARNING_RATE)
     scheduler = get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps=0,
@@ -123,7 +122,7 @@ def run(dataset_index):
 
     best_accuracy = 0
     for epoch in range(config.EPOCHS):
-        logger.info(f"epoch={epoch}")
+        logger.info(f"Epoch = {epoch}")
 
         train_loss, train_acc = engine.train_fn(
             train_data_loader, model, optimizer, device, scheduler)
@@ -135,12 +134,12 @@ def run(dataset_index):
         outputs, targets, val_loss, val_acc = engine.eval_fn(
             valid_data_loader, model, device)
         val_mcc = metrics.matthews_corrcoef(outputs, targets)
-        logger.info(f"val_MCC_Score = {val_mcc:.3f}")
+        logger.info(f"val_MCC_Score = {val_mcc:.4f}")
 
         outputs, targets, test_loss, test_acc = engine.eval_fn(
             test_data_loader, model, device)
         test_mcc = metrics.matthews_corrcoef(outputs, targets)
-        logger.info(f"test_MCC_Score = {test_mcc:.3f}")
+        logger.info(f"test_MCC_Score = {test_mcc:.4f}")
 
         logger.info(
             f"train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, test_loss={test_loss:.4f}")
@@ -149,26 +148,35 @@ def run(dataset_index):
         writer.add_scalar('loss/test', test_loss, epoch) # data grouping by `slash`
         
         logger.info(
-            f"train_acc={train_acc:.3f}, val_acc={val_acc:.3f}, test_acc={test_acc:.3f}")
+            f"train_acc={train_acc:.4f}, val_acc={val_acc:.4f}, test_acc={test_acc:.4f}")
         writer.add_scalar('acc/train', train_acc, epoch) # data grouping by `slash`
         writer.add_scalar('acc/val', val_acc, epoch) # data grouping by `slash`
         writer.add_scalar('acc/test', test_acc, epoch) # data grouping by `slash`
         
-        logger.info(f"val_mcc={val_acc:.3f}, test_mcc={test_acc:.3f}")
+        logger.info(f"val_mcc={val_acc:.4f}, test_mcc={test_acc:.4f}")
         writer.add_scalar('mcc/val', val_mcc, epoch) # data grouping by `slash`
         writer.add_scalar('mcc/test', test_mcc, epoch) # data grouping by `slash`
 
         accuracy = metrics.accuracy_score(targets, outputs)
-        logger.info(f"Accuracy Score = {accuracy:.3f}")
+        logger.info(f"Accuracy Score = {accuracy:.4f}")
+        
+        if accuracy < 0.4:
+            logger.info(f"Something is very wrong! Accuracy is only {accuracy:.4f} Stopping...")
+            break
 
         if accuracy > best_accuracy:
-            print(f"Saving model with Accuracy Score = {accuracy:.3f}")
-            torch.save(model.state_dict(), config.MODEL_PATH)
+            logger.info(f"Saving model with Accuracy Score = {accuracy:.4f}")
+            torch.save(model.state_dict(), config.MODEL_PATH[:-4] + "." + str(round(accuracy*100, 2)) + ".bin")
             best_accuracy = accuracy
+            es = 0
+        else:
+            es += 1
+            logger.info(f"Not improved for {es} times of 5. Best so far - {best_accuracy:.4f}")
+
+            if es > 4:
+                logger.info(f"Early stopping with best accuracy: {best_accuracy:.4f} and accuracy for this epoch: {accuracy:.4f} ...")
+                break
 
 
 if __name__ == "__main__":
-    run(2) #5 2 4 1 0 3 2
-    # uncomment if the same model needs to be run across all the datasets
-    # for i in range(1,7):
-        # run(i*-1)
+    app.run(main)

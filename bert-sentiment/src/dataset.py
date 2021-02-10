@@ -19,6 +19,7 @@ class BERTDataset:
         inputs = self.tokenizer.encode_plus(
             review,
             None,
+            truncation=True,
             add_special_tokens=True,
             max_length=self.max_len
         )
